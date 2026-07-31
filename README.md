@@ -30,7 +30,8 @@ one.
 
 ## Jurisdictions are paths, not codes
 
-`[:jp]`, `[:us]`, `[:us :ca]`, `[:fr]`. Rules attach at a level, and a person in
+`[:jp]`, `[:us]`, `[:us :ca]`, `[:eu]`, `[:eu :fr]`, `[:eu :de]`. Rules attach at
+a level, and a person in
 `[:us :ca]` is checked against every level that has rules, with the rest listed
 in `:worklaw/unchecked`.
 
@@ -42,6 +43,25 @@ twelve-hour day would be confidently wrong for a worker in San Jose.
 (law/check twelve-hour-day [:us :ca] date-of {:period week})
 ;; => {:worklaw/coverage :partial :worklaw/checked [[:us]] :worklaw/unchecked [[:us :ca]]}
 ```
+
+## Windows: a week cannot judge an annual cap
+
+Rules carry a window — `:day`, `:week`, `:month`, `:year`, `:rolling-months`.
+A rule whose window is longer than the period handed to `check` is **not
+evaluated** and says so, with the reason:
+
+| `:unevaluated/reason` | meaning | whose problem |
+|---|---|---|
+| `:window-longer-than-period` | seven days cannot judge 36協定's annual cap | inherent — no caller can fix it |
+| `:missing-period` | no `:period` given | caller |
+| `:missing-calendar` | no `:week-of` / `:month-of` given | caller |
+
+Rules over `:month` count **statutory overtime**, not raw hours, which needs the
+week and month a span falls in — so the caller supplies `:week-of` / `:month-of`
+for the same reason it supplies `:date-of`. Overtime does not double-count:
+daily excess first, then whatever weekly excess the remaining regular hours
+produce (`statutory-overtime`). The baseline comes from the most specific level
+that declares one, so a French week starts at 35h and a Japanese one at 40h.
 
 ## Rules that need a period say so
 
@@ -63,15 +83,23 @@ artifact of where the query was cut, not a rest period anyone was denied.
 
 ## Shipped rule sets
 
-Three jurisdictions, each rule carrying its provision and the date it was
+Six levels across three hierarchies, each rule carrying its provision and the date it was
 recorded, so a reader can check it rather than trust it — and so a stale rule set
 shows up as a stale date rather than as a confident answer.
 
 | jurisdiction | source | rules |
 |---|---|---|
-| `[:jp]` | 労働基準法 | daily 8h (32条2項) · weekly 40h (32条1項) · break 45min over 6h / 60min over 8h (34条1項) · weekly rest 24h (35条1項) |
+| `[:jp]` | 労働基準法 | daily 8h (32条2項) · weekly 40h (32条1項) · break 45min over 6h / 60min over 8h (34条1項) · weekly rest 24h (35条1項) · **36協定**: 月45h/年360h 限度時間 (36条4項) · 特別条項 単月100h (36条6項2号) / 年720h (36条5項) / 2か月平均80h (36条6項3号) / 月45h超は年6回まで (36条5項) |
 | `[:us]` | FLSA (federal) | overtime premium from 40h/week (29 U.S.C. §207(a)(1)) |
+| `[:us :ca]` | Cal. Lab. Code / IWC | daily OT from 8h · double time from 12h (§510(a)) · meal 30min over 5h (§512(a), §226.7) · day of rest in seven (§551–552) · seventh consecutive day (§510(a)) |
 | `[:eu]` | Directive 2003/88/EC | weekly 48h (Art. 6(b)) · daily rest 11h (Art. 3) · break over 6h (Art. 4) · weekly rest 24h (Art. 5) |
+| `[:eu :fr]` | Code du travail | durée légale 35h (L3121-27) · daily 10h (L3121-18) · weekly 48h (L3121-20) · daily rest 11h (L3131-1) · weekly rest 35h (L3132-2) |
+| `[:eu :de]` | ArbZG | daily 8h (§3) · break 30min over 6h / 45min over 9h (§4) · daily rest 11h (§5) |
+
+A member state is a **sub-level of `[:eu]`**, not a bare country code: a French
+worker is `[:eu :fr]` because the directive is the floor and the Code du travail
+layers on top. `[:fr]` alone resolves to coverage `:none` — a bare code would
+have to be guessed into a hierarchy, and this library does not guess.
 
 Statutory **silence** is recorded too, so it is not left to be inferred:
 
@@ -102,8 +130,8 @@ overtime to a person.
 |---|---|
 | Role | capability |
 | Dependencies | none |
-| Tests | 20 tests, 72 assertions, all green |
-| Jurisdictions | 3 (`[:jp]` `[:us]` `[:eu]`) — anything else is `:none`, by construction |
+| Tests | 38 tests, 185 assertions, all green |
+| Jurisdictions | 6 levels across 3 hierarchies — anything else is `:none` or `:partial`, by construction |
 | Runtime | `.cljc`, JVM + ClojureScript |
 | Actor | `cloud-itonami/kintai` (勤怠) |
 

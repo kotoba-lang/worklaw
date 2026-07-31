@@ -1,5 +1,6 @@
 (ns kotoba.worklaw-test
   (:require [clojure.test :refer [deftest is testing]]
+            [clojure.string :as str]
             [kotoba.worklaw :as law]))
 
 (def ^:private hour 3600000)
@@ -39,24 +40,34 @@
     (is (= "NOT CHECKED — no rules for [[:atlantis]]" (law/describe r)))))
 
 (deftest a-subnational-level-with-no-rules-makes-coverage-partial
-  (testing "US federal has no daily overtime; California does. A 12-hour day
-            in [:us :ca] must not read as compliant"
-    (let [r (law/check [(worked 0 8 20)] [:us :ca] date-of week)]
+  (testing "Texas has no rule set here, so a 12-hour day under [:us :tx] is
+            checked at federal level only and must not read as compliant"
+    (let [r (law/check [(worked 0 8 20)] [:us :tx] date-of week)]
       (is (= :partial (:worklaw/coverage r)))
       (is (= [[:us]] (:worklaw/checked r)))
-      (is (= [[:us :ca]] (:worklaw/unchecked r)))
+      (is (= [[:us :tx]] (:worklaw/unchecked r)))
       (is (not (law/compliant? r)))
-      (is (= "PARTIALLY CHECKED — no rules for [[:us :ca]]" (law/describe r))))))
+      (is (= "PARTIALLY CHECKED — no rules for [[:us :tx]]" (law/describe r))))))
 
 (deftest full-coverage-with-nothing-firing-is-the-only-compliant-case
-  (let [r (law/check [(worked 0 9 17 1)] [:jp] date-of week)]
+  (let [r (law/check [(worked 0 9 18 1)] [:us] date-of week)]
     (is (= :full (:worklaw/coverage r)))
     (is (law/compliant? r))
     (is (= "checked; no violations" (law/describe r)))))
 
+(deftest a-clean-week-under-jp-is-still-not-compliant-because-of-the-annual-caps
+  (testing "seven days cannot judge 36協定. A tool that called this week
+            compliant would be answering a question it never asked"
+    (let [r (law/check [(worked 0 9 17 1)] [:jp] date-of week)]
+      (is (= :full (:worklaw/coverage r)))
+      (is (empty? (:worklaw/violations r)))
+      (is (not (law/compliant? r)))
+      (is (every? #(= :window-longer-than-period (:unevaluated/reason %))
+                  (:worklaw/unevaluated r))))))
+
 (deftest compliant?-is-not-just-an-empty-violation-list
   (let [unchecked (law/check [] [:atlantis] date-of week)
-        checked   (law/check [] [:jp] date-of week)]
+        checked   (law/check [] [:us] date-of week)]
     (is (empty? (:worklaw/violations unchecked)))
     (is (empty? (:worklaw/violations checked)))
     (testing "same violation list, opposite verdicts"
@@ -68,18 +79,22 @@
             nothing after says nothing about whether the weekend was off"
     (let [w (for [d (range 5)] (worked d 9 18 1))
           r (law/check w [:jp] date-of)]
-      (is (= [:jp-weekly-rest] (:worklaw/unevaluated r)))
+      (is (= [{:rule/id :jp-weekly-rest :unevaluated/reason :missing-period}]
+             (filterv #(= :jp-weekly-rest (:rule/id %)) (:worklaw/unevaluated r))))
       (is (empty? (:worklaw/violations r)))
       (testing "coverage is full, yet the week is not compliant"
         (is (= :full (:worklaw/coverage r)))
         (is (not (law/compliant? r))))
-      (is (= "checked; NOT EVALUATED without a period: [:jp-weekly-rest]"
-             (law/describe r)))))
+      (is (re-find #"jp-weekly-rest" (law/describe r)))
+      (is (re-find #"missing-period" (law/describe r)))))
   (testing "with :period it resolves"
     (let [w (for [d (range 5)] (worked d 9 18 1))
           r (law/check w [:jp] date-of week)]
-      (is (empty? (:worklaw/unevaluated r)))
-      (is (law/compliant? r)))))
+      (is (empty? (filterv #(= :jp-weekly-rest (:rule/id %)) (:worklaw/unevaluated r))))
+      (testing "but the 36協定 caps still cannot be judged over seven days"
+        (is (every? #(= :window-longer-than-period (:unevaluated/reason %))
+                    (:worklaw/unevaluated r)))
+        (is (not (law/compliant? r)))))))
 
 (deftest an-edge-gap-may-satisfy-a-rule-but-never-violate-one
   (testing "the window opens at midnight before an 09:00 start — a 9h leading
@@ -206,5 +221,186 @@
     (is (every? string? (:worklaw/citations r)))))
 
 (deftest the-shipped-rule-set-is-small-and-known
-  (testing "three jurisdictions. Anything else is :none, by construction"
-    (is (= #{[:jp] [:us] [:eu]} (law/known-jurisdictions)))))
+  (testing "six levels across four hierarchies. Anything else is :none or
+            :partial, by construction — never a silent pass"
+    (is (= #{[:jp] [:us] [:us :ca] [:eu] [:eu :fr] [:eu :de]}
+           (law/known-jurisdictions))))
+  (testing "a bare member-state code is NOT a jurisdiction — France is [:eu :fr]"
+    (is (= :none (:worklaw/coverage (law/check [] [:fr] date-of week))))))
+
+;; ---------------------------------------------------------------------------
+;; California — the sub-national level the path model exists for
+;; ---------------------------------------------------------------------------
+
+(deftest ca-adds-the-daily-overtime-federal-law-lacks
+  (let [twelve (law/check [(worked 0 8 20)] [:us :ca] date-of week)
+        fed    (law/check [(worked 0 8 20)] [:us] date-of week)]
+    (testing "the same 12-hour day: silent federally, priced in California"
+      (is (empty? (:worklaw/violations fed)))
+      (is (some #(= :ca-daily-ot-8 (get-in % [:violation/rule :rule/id]))
+                (:worklaw/violations twelve))))
+    (testing "and both levels are checked, so coverage is full"
+      (is (= :full (:worklaw/coverage twelve)))
+      (is (= [[:us] [:us :ca]] (:worklaw/checked twelve))))))
+
+(deftest ca-double-time-past-twelve-hours
+  (let [r (law/check [(worked 0 6 20)] [:us :ca] date-of week)   ;; 14h
+        v (first (filter #(= :ca-daily-dt-12 (get-in % [:violation/rule :rule/id]))
+                         (:worklaw/violations r)))]
+    (is (some? v))
+    (is (= :double-time-due (:violation/kind v)))
+    (is (= "Cal. Lab. Code §510(a)" (get-in v [:violation/rule :rule/citation])))))
+
+(deftest ca-overtime-is-priced-and-the-meal-break-is-not
+  (let [r (law/check [(worked 0 8 20)] [:us :ca] date-of week)]
+    (testing "a 12h day with no break trips both, and they route differently"
+      (is (some #(= :ca-daily-ot-8 (get-in % [:violation/rule :rule/id])) (law/priced r)))
+      (is (some #(= :ca-meal-30 (get-in % [:violation/rule :rule/id])) (law/prohibitions r)))
+      (is (empty? (filter #(= :ca-meal-30 (get-in % [:violation/rule :rule/id]))
+                          (law/priced r)))))))
+
+(deftest ca-seventh-consecutive-day
+  (let [w (for [d (range 7)] (worked d 9 17 1))
+        r (law/check w [:us :ca] date-of week)]
+    (is (some #(= :ca-seventh-day (get-in % [:violation/rule :rule/id]))
+              (:worklaw/violations r)))))
+
+;; ---------------------------------------------------------------------------
+;; JP 36協定 — the long-window rules
+;; ---------------------------------------------------------------------------
+
+(def ^:private month-ms (* 30 day))
+
+(defn- month-of [ms] (quot (- ms t0) month-ms))
+(defn- week-of [ms] (quot (- ms t0) (* 7 day)))
+
+(def ^:private year-opts
+  "A full-year window with the calendar the long-window rules need."
+  {:period [t0 (+ t0 (* 365 day))] :week-of week-of :month-of month-of})
+
+(defn- heavy-month
+  "Four working weeks — five days on, two off — at `h` hours a day,
+  starting at day `offset`. Weekends matter: 20 CONSECUTIVE days would
+  also breach the weekly 40h cap, and the weekly excess would land in the
+  same overtime total, so the fixture keeps the two effects apart."
+  [offset h]
+  (for [wk (range 4) d (range 5)]
+    (worked (+ offset (* wk 7) d) 9 (+ 9 h))))
+
+(deftest jp-36-monthly-limit
+  (testing "20 working days × 10h = 40h of statutory overtime — under 45"
+    (let [r (law/check (heavy-month 0 10) [:jp] date-of year-opts)]
+      (is (empty? (filter #(= :jp-36-monthly-45 (get-in % [:violation/rule :rule/id]))
+                          (:worklaw/violations r))))))
+  (testing "20 working days × 12h = 80h of overtime — over the 45h 限度時間"
+    (let [r (law/check (heavy-month 0 12) [:jp] date-of year-opts)
+          v (first (filter #(= :jp-36-monthly-45 (get-in % [:violation/rule :rule/id]))
+                           (:worklaw/violations r)))]
+      (is (some? v))
+      (is (= "労働基準法 第36条第4項" (get-in v [:violation/rule :rule/citation]))))))
+
+(deftest jp-36-absolute-monthly-ceiling
+  (testing "20 working days × 14h = 120h of overtime — past the 100h ceiling"
+    (let [r (law/check (heavy-month 0 14) [:jp] date-of year-opts)]
+      (is (some #(= :jp-36-special-monthly-100 (get-in % [:violation/rule :rule/id]))
+                (:worklaw/violations r))))))
+
+(deftest jp-36-rolling-two-month-average
+  (testing "two consecutive 80h-overtime months average exactly 80 — not over"
+    (let [w (concat (heavy-month 0 12) (heavy-month 30 12))
+          r (law/check w [:jp] date-of year-opts)]
+      (is (empty? (filter #(= :jp-36-rolling-80 (get-in % [:violation/rule :rule/id]))
+                          (:worklaw/violations r))))))
+  (testing "100h then 80h averages 90 — over"
+    (let [w (concat (heavy-month 0 13) (heavy-month 30 12))
+          r (law/check w [:jp] date-of year-opts)]
+      (is (some #(= :jp-36-rolling-80 (get-in % [:violation/rule :rule/id]))
+                (:worklaw/violations r))))))
+
+(deftest jp-36-annual-cap
+  (testing "six 80h-overtime months = 480h, past the 360h 限度時間"
+    (let [w (mapcat #(heavy-month (* 30 %) 12) (range 6))
+          r (law/check w [:jp] date-of year-opts)]
+      (is (some #(= :jp-36-annual-360 (get-in % [:violation/rule :rule/id]))
+                (:worklaw/violations r))))))
+
+(deftest jp-36-months-over-the-limit-are-counted
+  (testing "seven months over 45h — the special clause allows six"
+    (let [w (mapcat #(heavy-month (* 30 %) 12) (range 7))
+          r (law/check w [:jp] date-of year-opts)
+          v (first (filter #(= :jp-36-months-over-6 (get-in % [:violation/rule :rule/id]))
+                           (:worklaw/violations r)))]
+      (is (some? v))
+      (is (= 7 (:violation/actual v))))))
+
+(deftest long-window-rules-need-a-calendar-and-say-which
+  (testing "a year-long period with no :week-of/:month-of is a caller error,
+            reported as such rather than as an inherent limit"
+    (let [r (law/check (heavy-month 0 12) [:jp] date-of {:period [t0 (+ t0 (* 365 day))]})]
+      (is (every? #(= :missing-calendar (:unevaluated/reason %))
+                  (filter #(str/starts-with? (name (:rule/id %)) "jp-36")
+                          (:worklaw/unevaluated r)))))))
+
+;; ---------------------------------------------------------------------------
+;; Statutory overtime baseline
+;; ---------------------------------------------------------------------------
+
+(deftest overtime-does-not-double-count-daily-and-weekly-excess
+  (testing "5 × 10h: 10h daily excess, and the 40h of regular time is exactly
+            the weekly baseline — so 10h of overtime, not 20"
+    (is (= 10.0 (law/statutory-overtime [[10 10 10 10 10]] {:daily 8 :weekly 40}))))
+  (testing "6 × 8h: no daily excess, 48h regular, 8h weekly excess"
+    (is (= 8.0 (law/statutory-overtime [[8 8 8 8 8 8]] {:daily 8 :weekly 40}))))
+  (testing "a weekly-only baseline (France) counts everything past 35h"
+    (is (= 5.0 (law/statutory-overtime [[8 8 8 8 8]] {:weekly 35})))))
+
+;; ---------------------------------------------------------------------------
+;; EU member states — national law layered on the directive floor
+;; ---------------------------------------------------------------------------
+
+(deftest fr-inherits-the-directive-and-adds-to-it
+  (let [w (for [d (range 5)] (worked d 9 20 0))   ;; 5 × 11h = 55h
+        r (law/check w [:eu :fr] date-of week)
+        ids (set (map #(get-in % [:violation/rule :rule/id]) (:worklaw/violations r)))]
+    (is (= [[:eu] [:eu :fr]] (:worklaw/checked r)))
+    (testing "the directive's 48h weekly cap still applies"
+      (is (contains? ids :eu-weekly-48)))
+    (testing "and the Code du travail adds a 10h daily cap the directive lacks"
+      (is (contains? ids :fr-daily-10)))
+    (testing "hours past 35 are heures supplémentaires — priced, not forbidden"
+      (is (some #(= :fr-weekly-ot-35 (get-in % [:violation/rule :rule/id])) (law/priced r))))))
+
+(deftest fr-overtime-baseline-is-35-not-40
+  (testing "the most specific level that declares a baseline wins"
+    (let [w (for [d (range 5)] (worked d 9 17 0))   ;; 5 × 8h = 40h
+          r (law/check w [:eu :fr] date-of week)]
+      (is (some #(= :fr-weekly-ot-35 (get-in % [:violation/rule :rule/id]))
+                (:worklaw/violations r))))))
+
+(deftest de-break-thresholds-differ-from-jp
+  (testing "ArbZG §4 wants 30 min over 6h, where 労基法 wants 45"
+    (let [r (law/check [(worked 0 9 17 0.6)] [:eu :de] date-of week)]  ;; 7.4h, 36 min
+      (is (empty? (filter #(= :de-break-30 (get-in % [:violation/rule :rule/id]))
+                          (:worklaw/violations r)))))
+    (let [r (law/check [(worked 0 9 17 0.6)] [:jp] date-of week)]
+      (is (some #(= :jp-break-45 (get-in % [:violation/rule :rule/id]))
+                (:worklaw/violations r))))))
+
+(deftest de-records-what-it-does-not-model
+  (testing "the six-month averaging that permits a 10h day is named as a gap"
+    (let [rule (first (filter #(= :de-daily-8 (:rule/id %))
+                              (get-in law/rules [[:eu :de] :law/rules])))]
+      (is (re-find #"six months" (:rule/note rule))))))
+
+(deftest fr-records-the-twelve-week-average-it-omits
+  (is (some #(= :rolling-average-overtime-max (:absent/kind %)) (law/absences [:eu :fr]))))
+
+;; ---------------------------------------------------------------------------
+;; Window vocabulary
+;; ---------------------------------------------------------------------------
+
+(deftest every-rule-kind-has-a-declared-window
+  (doseq [[_ {:law/keys [rules]}] law/rules
+          r rules]
+    (is (contains? law/window-of-kind (:rule/kind r))
+        (str (:rule/id r) " has kind " (:rule/kind r) " with no declared window"))))
