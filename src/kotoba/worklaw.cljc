@@ -280,6 +280,20 @@
 ;; Per-window checks
 ;; ---------------------------------------------------------------------------
 
+(defn breaks-known?
+  "Does this day's data say anything about breaks at all?
+
+  `:worked/break-ms` absent means the SOURCE does not record breaks — a
+  planned roster says `09:00–17:00` and nothing about whether anyone
+  stopped for lunch. `:worked/break-ms 0` means the source does record
+  them and there were none, which is a real finding.
+
+  nil is not zero. Asserting a missed break from a roster would be
+  claiming to have seen something the data never contained, and every
+  full-day planned shift would read as unlawful."
+  [spans]
+  (every? #(some? (:worked/break-ms %)) spans))
+
 (defn- check-daily [rule day-key spans]
   (let [total-ms (reduce + 0 (map :worked/ms spans))
         break-ms (reduce + 0 (map #(or (:worked/break-ms %) 0) spans))
@@ -306,7 +320,8 @@
                                 "h attract double time")})
 
       :break-min
-      (when (and (> h (:rule/over-hours rule))
+      (when (and (breaks-known? spans)
+                 (> h (:rule/over-hours rule))
                  (< (/ break-ms 60000.0) (:rule/minutes rule)))
         {:violation/rule rule :violation/day day-key
          :violation/actual (/ break-ms 60000.0) :violation/limit (:rule/minutes rule)
@@ -529,8 +544,18 @@
                      :missing-calendar))
          by-blocked (group-by blocked applicable)
          yes (get by-blocked nil [])
-         no  (vec (for [[reason rs] by-blocked :when reason, r rs]
-                    {:rule/id (:rule/id r) :unevaluated/reason reason}))
+         ;; A break rule over a day whose source records no breaks is not
+         ;; satisfied and not violated — it was not evaluated, and saying
+         ;; so is the whole point of this library.
+         break-days-unknown (remove #(breaks-known? (val %)) by-day)
+         no  (vec (concat
+                   (for [[reason rs] by-blocked :when reason, r rs]
+                     {:rule/id (:rule/id r) :unevaluated/reason reason})
+                   (when (seq break-days-unknown)
+                     (for [r yes :when (= :break-min (:rule/kind r))]
+                       {:rule/id (:rule/id r)
+                        :unevaluated/reason :missing-break-data
+                        :unevaluated/days (mapv key break-days-unknown)}))))
          daily (for [r yes [day spans] by-day :let [v (check-daily r day spans)] :when v] v)
          weekly (keep #(check-weekly % worked date-of) yes)
          rest-v (mapcat #(or (check-rest % worked period) []) yes)

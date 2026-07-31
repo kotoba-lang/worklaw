@@ -42,6 +42,17 @@ Two more asymmetries to preserve: an **edge gap may satisfy a rule, never violat
 one**; and long-window rules count **statutory overtime** (daily excess first,
 then weekly excess of the remainder — never both in full).
 
+## nil is not zero
+
+`:worked/break-ms` **absent** means the source does not record breaks — a planned
+roster says `09:00–17:00` and nothing about lunch. `:worked/break-ms 0` means the
+source does record them and there were none. The first is `:missing-break-data`
+in `:worklaw/unevaluated`; the second is a violation.
+
+Do not default the key to 0. Asserting a missed break from a roster claims to
+have seen something the data never contained, and every full-day planned shift
+reads as unlawful — which is how `kintai`'s swap check first behaved.
+
 ## Prohibitions vs premiums
 
 `:violation/kind` in `priced-kinds` means the statute *prices* the hours.

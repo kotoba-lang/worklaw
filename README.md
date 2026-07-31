@@ -81,6 +81,24 @@ Related asymmetry, and the reason the edge gaps are computed separately:
 open at midnight before an 09:00 shift shows a nine-hour leading gap that is an
 artifact of where the query was cut, not a rest period anyone was denied.
 
+## nil is not zero
+
+`:worked/break-ms` **absent** means the source does not record breaks; a planned
+roster says `09:00–17:00` and nothing about lunch. `:worked/break-ms 0` means it
+does record them and there were none.
+
+```clojure
+(law/check [{:worked/start .. :worked/end .. :worked/ms ..}] [:jp] date-of opts)
+;; => break rules land in :worklaw/unevaluated as :missing-break-data
+
+(law/check [{... :worked/break-ms 0}] [:jp] date-of opts)
+;; => :jp-break-45 fires
+```
+
+Asserting a missed break from a roster would claim to have seen something the
+data never contained, and every full-day planned shift would read as unlawful.
+`breaks-known?` is the predicate.
+
 ## Shipped rule sets
 
 Six levels across three hierarchies, each rule carrying its provision and the date it was

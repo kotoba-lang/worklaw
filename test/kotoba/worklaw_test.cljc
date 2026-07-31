@@ -404,3 +404,50 @@
           r rules]
     (is (contains? law/window-of-kind (:rule/kind r))
         (str (:rule/id r) " has kind " (:rule/kind r) " with no declared window"))))
+
+;; ---------------------------------------------------------------------------
+;; Break data: nil is not zero
+;; ---------------------------------------------------------------------------
+
+(defn- planned
+  "A span as a ROSTER knows it: start, end, and nothing about breaks."
+  [d from to]
+  (let [start (+ t0 (* d day) (long (* from hour)))
+        end   (+ t0 (* d day) (long (* to hour)))]
+    {:worked/person "w-1" :worked/start start :worked/end end
+     :worked/ms (- end start)}))
+
+(deftest a-source-that-records-no-breaks-does-not-violate-a-break-rule
+  (testing "a planned 8h shift says nothing about lunch; asserting a missed
+            break from it would be claiming to have seen something the data
+            never contained, and every full-day roster entry would be unlawful"
+    (let [r (law/check [(planned 0 9 17)] [:jp] date-of week)]
+      (is (empty? (filter #(= :break-min (get-in % [:violation/rule :rule/kind]))
+                          (:worklaw/violations r))))
+      (testing "and it is reported as unevaluated, not silently passed"
+        (is (some #(= :missing-break-data (:unevaluated/reason %))
+                  (:worklaw/unevaluated r)))
+        (is (not (law/compliant? r)))))))
+
+(deftest a-recorded-zero-length-break-IS-a-violation
+  (testing "nil means the source does not record breaks; 0 means it does and
+            there were none"
+    (let [r (law/check [(assoc (planned 0 9 17) :worked/break-ms 0)] [:jp] date-of week)]
+      (is (some #(= :jp-break-45 (get-in % [:violation/rule :rule/id]))
+                (:worklaw/violations r)))
+      (is (empty? (filter #(= :missing-break-data (:unevaluated/reason %))
+                          (:worklaw/unevaluated r)))))))
+
+(deftest breaks-known?-distinguishes-absent-from-zero
+  (is (law/breaks-known? [(assoc (planned 0 9 17) :worked/break-ms 0)]))
+  (is (not (law/breaks-known? [(planned 0 9 17)])))
+  (testing "one span without break data is enough to make the day unknown"
+    (is (not (law/breaks-known? [(assoc (planned 0 9 12) :worked/break-ms 0)
+                                 (planned 0 13 17)])))))
+
+(deftest hour-caps-still-apply-to-planned-shifts
+  (testing "a roster cannot say whether a break was taken, but it can certainly
+            say the day is ten hours long"
+    (let [r (law/check [(planned 0 9 19)] [:jp] date-of week)]
+      (is (some #(= :jp-daily-8 (get-in % [:violation/rule :rule/id]))
+                (:worklaw/violations r))))))
