@@ -55,7 +55,7 @@
   and a timezone this library will not assume.
 
   Portable (.cljc) across JVM / ClojureScript / SCI / GraalVM."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def ^:private ms-per-hour 3600000)
 (def ^:private ms-per-day 86400000)

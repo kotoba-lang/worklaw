@@ -1,6 +1,6 @@
 (ns kotoba.worklaw-test
   (:require [clojure.test :refer [deftest is testing]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [kotoba.worklaw :as law]))
 
 (def ^:private hour 3600000)
