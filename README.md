@@ -159,8 +159,8 @@ Adding a jurisdiction means adding a map with `:law/as-of` and a
 ## Test
 
 ```bash
-clojure -M:test
-clojure -M:lint
+kbb -M:test
+kbb -M:lint
 ```
 
 ## License

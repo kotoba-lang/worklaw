@@ -61,4 +61,4 @@ price. Keep `priced` and `prohibitions` distinct.
 
 ## Test
 
-    clojure -M:test && clojure -M:lint
+    kbb -M:test && kbb -M:lint
