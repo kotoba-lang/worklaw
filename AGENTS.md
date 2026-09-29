@@ -1,4 +1,4 @@
-# CLAUDE.md — kotoba-lang/worklaw
+# AGENTS.md — kotoba-lang/worklaw
 
 Statutory working-time limits by jurisdiction. **Not legal advice** — a
 mechanism plus a cited, deliberately incomplete rule set. Zero dependencies.
